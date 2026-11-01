@@ -1,11 +1,30 @@
-﻿.venv/
+﻿# Python virtual environment
+.venv/
+venv/
+
+# Python cache and compiled files
 __pycache__/
 *.py[cod]
-.env
-.env.*
-!.env.example
+
+# Test and lint caches
 .pytest_cache/
 .ruff_cache/
-.streamlit/secrets.toml
-dist/
-build/
+.coverage
+htmlcov/
+
+# Environment variables and secrets
+.env
+.env.*
+
+# Keep the example environment template
+!.env.example
+
+# Frontend dependencies and build output
+frontend/node_modules/
+frontend/dist/
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

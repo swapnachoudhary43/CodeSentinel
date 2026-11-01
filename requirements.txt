@@ -1,5 +1,7 @@
-﻿langgraph
+﻿fastapi
+uvicorn[standard]
+langgraph
 google-genai
-streamlit
-pytest
+python-dotenv
 ruff
+pytest
