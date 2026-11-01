@@ -1,4 +1,4 @@
-
+import os
 from typing import Any
 from uuid import uuid4
 
@@ -16,12 +16,19 @@ app = FastAPI(
     version="0.2.0",
 )
 
+frontend_url = os.getenv("FRONTEND_URL", "").strip()
+
+allowed_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
+if frontend_url:
+    allowed_origins.append(frontend_url.rstrip("/"))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=allowed_origins,
     allow_credentials=False,
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],
