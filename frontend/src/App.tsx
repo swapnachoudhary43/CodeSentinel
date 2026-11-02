@@ -1,8 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 
 const API_URL =
-  import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+  import.meta.env.VITE_API_URL ??
+  (import.meta.env.DEV ? "" : "http://127.0.0.1:8000");
+const API_HINT = API_URL || "http://127.0.0.1:8000";
 const SUPPORTED_LANGUAGES = [
   "python",
   "javascript",
@@ -10,6 +12,21 @@ const SUPPORTED_LANGUAGES = [
   "c",
   "c++",
 ] as const;
+
+const REVIEW_DECISIONS = [
+  { id: "approve", label: "Approve" },
+  { id: "approve_with_warnings", label: "Approve with warnings" },
+  { id: "request_changes", label: "Request changes" },
+  { id: "reject", label: "Reject" },
+  { id: "defer", label: "Defer" },
+] as const;
+
+type ReviewDecision = (typeof REVIEW_DECISIONS)[number]["id"];
+
+type LiveEvent = {
+  agent: string;
+  status: string;
+};
 
 const DEFAULT_CODE = `def divide(a, b):
     return a / b
@@ -45,8 +62,11 @@ type AnalysisResult = {
   review_decision: string;
   review_feedback: string;
   review_completed: boolean;
+  context: Record<string, unknown>;
   agent_status: Record<string, string>;
   agent_results: Record<string, unknown>;
+  specialized_agent_results: Record<string, unknown>;
+  edge_case_recommendations: Record<string, unknown>;
   audit_log: Array<Record<string, unknown>>;
   pending?: boolean;
 };
@@ -180,23 +200,37 @@ function getStatusLabel(status: string): string {
 }
 
 function getVerificationLabel(verification?: string): string {
-  if (!verification) return "Not assessed";
+  if (!verification) return "Not checked";
 
   const labels: Record<string, string> = {
-    tool_reported: "Reported by tool",
-    verified: "Verified",
-    not_verified: "Not independently verified",
-    requires_human_review: "Requires human review",
+    VERIFIED: "Verified",
+    CONTRADICTED: "Contradicted",
+    UNRESOLVED: "Unresolved",
+    NOT_CHECKED: "Not checked",
   };
 
   return labels[verification] || formatLabel(verification);
 }
 
 function isPotentialFinding(finding: Finding): boolean {
+  const verification = (finding.verification || "").toUpperCase();
+  if (verification === "VERIFIED") return false;
+  if (
+    finding.source === "ruff" ||
+    finding.source === "python_compile" ||
+    finding.source.endsWith("_syntax")
+  ) {
+    return false;
+  }
+
   return (
     finding.source === "gemini_ai" ||
-    finding.verification === "requires_human_review" ||
-    finding.verification === "not_verified"
+    finding.source === "logic_agent" ||
+    finding.source === "security_agent" ||
+    finding.source === "performance_agent" ||
+    verification === "UNRESOLVED" ||
+    verification === "NOT_CHECKED" ||
+    verification === "CONTRADICTED"
   );
 }
 
@@ -211,6 +245,9 @@ function App() {
   const [filter, setFilter] = useState("all");
   const [reviewFeedback, setReviewFeedback] = useState("");
   const [reviewLoading, setReviewLoading] = useState(false);
+  const [liveEvents, setLiveEvents] = useState<LiveEvent[]>([]);
+  const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
+  const analysisInFlight = useRef(false);
 
   const lineCount = useMemo(
     () => (sourceCode.length ? sourceCode.split("\n").length : 0),
@@ -224,6 +261,12 @@ function App() {
   const toolReportedCount = result
     ? result.findings.length - potentialCount
     : 0;
+
+  const context = result?.context as Record<string, unknown> | undefined;
+
+  const specializedAgents = result
+    ? Object.entries(result.specialized_agent_results || {})
+    : [];
 
   const visibleFindings = useMemo(() => {
     if (!result) return [];
@@ -240,6 +283,22 @@ function App() {
 
     return result.findings;
   }, [result, filter]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    fetch(`${API_URL}/health`)
+      .then((response) => {
+        if (!cancelled) setBackendOnline(response.ok);
+      })
+      .catch(() => {
+        if (!cancelled) setBackendOnline(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   function parseAnalysisResult(payload: unknown): AnalysisResult {
     if (!payload || typeof payload !== "object") {
@@ -283,8 +342,13 @@ function App() {
       review_decision: data.review_decision || "",
       review_feedback: data.review_feedback || "",
       review_completed: Boolean(data.review_completed),
-      agent_status: data.agent_status || {},
-      agent_results: data.agent_results || {},
+      context: (data.context as Record<string, unknown>) || {},
+      agent_status: (data.agent_status as Record<string, string>) || {},
+      agent_results: (data.agent_results as Record<string, unknown>) || {},
+      specialized_agent_results:
+        (data.specialized_agent_results as Record<string, unknown>) || {},
+      edge_case_recommendations:
+        (data.edge_case_recommendations as Record<string, unknown>) || {},
       audit_log: Array.isArray(data.audit_log)
         ? data.audit_log
         : [],
@@ -316,11 +380,89 @@ function App() {
     return parseAnalysisResult(data);
   }
 
+  async function consumeAnalysisStream(
+    response: Response,
+  ): Promise<AnalysisResult> {
+    if (!response.ok) {
+      const data: unknown = await response.json().catch(() => null);
+      const detail =
+        data &&
+        typeof data === "object" &&
+        "detail" in data &&
+        typeof data.detail === "string"
+          ? data.detail
+          : `The API returned HTTP ${response.status}.`;
+      throw new Error(detail);
+    }
+
+    if (!response.body) {
+      throw new Error("The analysis stream returned no data.");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let finalResult: AnalysisResult | null = null;
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const chunks = buffer.split("\n\n");
+      buffer = chunks.pop() ?? "";
+
+      for (const chunk of chunks) {
+        const line = chunk
+          .split("\n")
+          .find((item) => item.startsWith("data:"));
+        if (!line) continue;
+
+        const payload = JSON.parse(line.slice(5).trim()) as {
+          type?: string;
+          agent?: string;
+          status?: string;
+          detail?: string;
+          result?: unknown;
+        };
+
+        if (payload.type === "error") {
+          throw new Error(payload.detail || "Analysis failed.");
+        }
+
+        if (payload.type === "agent_update") {
+          setLiveEvents((current) => [
+            ...current,
+            {
+              agent: payload.agent || "workflow",
+              status: payload.status || "running",
+            },
+          ]);
+        }
+
+        if (payload.type === "complete") {
+          finalResult = parseAnalysisResult(payload.result);
+        }
+      }
+    }
+
+    if (!finalResult) {
+      throw new Error(
+        "The analysis stream ended before the backend returned a result.",
+      );
+    }
+
+    return finalResult;
+  }
+
   async function runAnalysis() {
+    if (analysisInFlight.current) return;
+
     setRequestError("");
     setResult(null);
     setFilter("all");
     setReviewFeedback("");
+    setLiveEvents([]);
 
     if (!sourceCode.trim()) {
       setRequestError(
@@ -329,10 +471,11 @@ function App() {
       return;
     }
 
+    analysisInFlight.current = true;
     setLoading(true);
 
     try {
-      const response = await fetch(`${API_URL}/api/analyze`, {
+      const response = await fetch(`${API_URL}/api/analyze/stream`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -344,31 +487,20 @@ function App() {
         }),
       });
 
-      const data: unknown = await response.json().catch(() => null);
-
-      if (!response.ok) {
-        const detail =
-          data &&
-          typeof data === "object" &&
-          "detail" in data &&
-          typeof data.detail === "string"
-            ? data.detail
-            : `The API returned HTTP ${response.status}.`;
-
-        throw new Error(detail);
-      }
-
-      setResult(parseAnalysisResult(data));
+      setResult(await consumeAnalysisStream(response));
+      setBackendOnline(true);
     } catch (error) {
       setRequestError(getErrorMessage(error));
+      if (error instanceof TypeError) {
+        setBackendOnline(false);
+      }
     } finally {
+      analysisInFlight.current = false;
       setLoading(false);
     }
   }
 
-  async function submitHumanReview(
-    decision: "approve" | "reject",
-  ) {
+  async function submitHumanReview(decision: ReviewDecision) {
     if (!result?.thread_id || reviewLoading) return;
 
     setRequestError("");
@@ -434,6 +566,35 @@ function App() {
     }
   }
 
+  async function refreshReview() {
+    if (!result?.thread_id || reviewLoading) return;
+
+    setRequestError("");
+    setReviewLoading(true);
+
+    try {
+      setResult(await fetchReviewState(result.thread_id));
+    } catch (error) {
+      setRequestError(getErrorMessage(error));
+    } finally {
+      setReviewLoading(false);
+    }
+  }
+
+  function startNewAnalysis() {
+    setSelectedLanguage("python");
+    setSourceCode(DEFAULT_CODE);
+    setResult(null);
+    setRequestError("");
+    setFilter("all");
+    setReviewFeedback("");
+    setLiveEvents([]);
+    document.getElementById("analysis-workspace")?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  }
+
   function loadExample() {
     setSourceCode(getDefaultCodeForLanguage(selectedLanguage));
     setResult(null);
@@ -458,14 +619,24 @@ function App() {
 
           <div>
             <div className="brand-name">CodeSentinel</div>
-            <div className="brand-caption">Code intelligence</div>
+            <div className="brand-caption">Multi-agent review</div>
           </div>
         </div>
 
         <div className="sidebar-section-label">WORKSPACE</div>
 
         <nav className="side-nav" aria-label="Main navigation">
-          <button className="nav-item active" type="button">
+          <button
+            className="nav-item active"
+            type="button"
+            aria-current="page"
+            onClick={() =>
+              document.getElementById("analysis-workspace")?.scrollIntoView({
+                behavior: "smooth",
+                block: "start",
+              })
+            }
+          >
             <span className="nav-icon">⌂</span>
             <span>Code Analysis</span>
           </button>
@@ -473,7 +644,7 @@ function App() {
           <button
             className="nav-item"
             type="button"
-            onClick={loadExample}
+            onClick={startNewAnalysis}
           >
             <span className="nav-icon">＋</span>
             <span>New Analysis</span>
@@ -482,9 +653,9 @@ function App() {
 
         <div className="sidebar-bottom">
           <div className="sidebar-bottom-mark">✳</div>
-          <p>Better code.</p>
-          <p>Safer tomorrow.</p>
-          <span>Analyze · Verify · Improve</span>
+          <p>Review with evidence.</p>
+          <p>Decide with context.</p>
+          <span>Analyze · Verify · Decide</span>
         </div>
       </aside>
 
@@ -497,8 +668,16 @@ function App() {
           </div>
 
           <div className="topbar-right">
-            <span className="connection-dot" />
-            <span>Local analysis</span>
+            <span
+              className={`connection-dot${backendOnline === false ? " is-offline" : ""}`}
+            />
+            <span>
+              {backendOnline === false
+                ? "API unreachable"
+                : backendOnline
+                  ? "API connected"
+                  : "Checking API"}
+            </span>
             <div className="avatar" aria-label="User initials">
               SC
             </div>
@@ -536,7 +715,7 @@ function App() {
             </div>
           </section>
 
-          <section className="editor-card">
+          <section className="editor-card" id="analysis-workspace">
             <div className="card-heading">
               <div>
                 <div className="section-kicker">
@@ -544,8 +723,9 @@ function App() {
                 </div>
                 <h2>Review your code</h2>
                 <p>
-                  Submit Python source code for analysis. Submitted code
-                  is not executed by this workflow.
+                  Submit {getLanguageLabel(selectedLanguage)} source code
+                  for analysis. Submitted code is not executed by this
+                  workflow.
                 </p>
               </div>
 
@@ -672,7 +852,7 @@ function App() {
                   <strong>Analysis could not be completed</strong>
                   <p>{requestError}</p>
                   <span>
-                    Check that the backend is running at {API_URL}.
+                    Check that the backend is running at {API_HINT}.
                   </span>
                 </div>
               </div>
@@ -684,9 +864,17 @@ function App() {
               <span className="loading-spinner" />
               <div>
                 <strong>Analyzing your code</strong>
-                <p>
-                  Running the available checks and preparing the review.
-                </p>
+                {liveEvents.length === 0 ? (
+                  <p>Waiting for the backend workflow to report progress.</p>
+                ) : (
+                  <ol className="live-events">
+                    {liveEvents.map((event, index) => (
+                      <li key={`${event.agent}-${event.status}-${index}`}>
+                        {formatLabel(event.agent)}: {formatLabel(event.status)}
+                      </li>
+                    ))}
+                  </ol>
+                )}
               </div>
             </section>
           )}
@@ -773,6 +961,80 @@ function App() {
                 )}
               </article>
 
+              {context && Object.keys(context).length > 0 && (
+                <article className="summary-card">
+                  <div className="summary-heading">
+                    <span className="summary-icon">⌕</span>
+                    <div>
+                      <span className="section-kicker">
+                        CODE CONTEXT
+                      </span>
+                      <h3>Detected project context</h3>
+                    </div>
+                  </div>
+
+                  <div className="agent-status-list">
+                    {Array.isArray(context.functions) && (
+                      <div className="agent-status-row">
+                        <span>Functions</span>
+                        <strong>{String(context.functions.length)}</strong>
+                      </div>
+                    )}
+
+                    {Array.isArray(context.classes) && (
+                      <div className="agent-status-row">
+                        <span>Classes</span>
+                        <strong>{String(context.classes.length)}</strong>
+                      </div>
+                    )}
+
+                    {context.detected_language && (
+                      <div className="agent-status-row">
+                        <span>Detected language</span>
+                        <strong>{String(context.detected_language)}</strong>
+                      </div>
+                    )}
+                  </div>
+                </article>
+              )}
+
+              {specializedAgents.length > 0 && (
+                <article className="trace-card">
+                  <div className="findings-heading">
+                    <div>
+                      <div className="section-kicker">
+                        SPECIALIZED AGENTS
+                      </div>
+                      <h3>Multi-agent analysis</h3>
+                    </div>
+
+                    <span className="findings-total">
+                      {specializedAgents.length} agents
+                    </span>
+                  </div>
+
+                  <div className="agent-status-list">
+                    {specializedAgents.map(([agent, payload]) => {
+                      const details =
+                        typeof payload === "object" && payload !== null
+                          ? JSON.stringify(payload, null, 2)
+                          : String(payload ?? "No additional details");
+
+                      return (
+                        <div className="agent-status-row" key={agent}>
+                          <span>{formatLabel(agent)}</span>
+                          <pre>
+                            {details.length > 300
+                              ? `${details.slice(0, 300)}...`
+                              : details}
+                          </pre>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </article>
+              )}
+
               <article className="workflow-card">
                 <div className="workflow-heading">
                   <div>
@@ -823,31 +1085,21 @@ function App() {
                     />
 
                     <div className="review-actions">
-                      <button
-                        className="button button-secondary"
-                        type="button"
-                        disabled={reviewLoading}
-                        onClick={() =>
-                          submitHumanReview("reject")
-                        }
-                      >
-                        {reviewLoading
-                          ? "Submitting..."
-                          : "Reject review"}
-                      </button>
-
-                      <button
-                        className="button button-primary"
-                        type="button"
-                        disabled={reviewLoading}
-                        onClick={() =>
-                          submitHumanReview("approve")
-                        }
-                      >
-                        {reviewLoading
-                          ? "Submitting..."
-                          : "Approve review"}
-                      </button>
+                      {REVIEW_DECISIONS.map((decision) => (
+                        <button
+                          key={decision.id}
+                          className={`button ${
+                            decision.id === "approve"
+                              ? "button-primary"
+                              : "button-secondary"
+                          }`}
+                          type="button"
+                          disabled={reviewLoading}
+                          onClick={() => submitHumanReview(decision.id)}
+                        >
+                          {reviewLoading ? "Submitting..." : decision.label}
+                        </button>
+                      ))}
                     </div>
                   </div>
                 ) : result.review_completed ? (
@@ -860,6 +1112,10 @@ function App() {
                     {result.review_feedback && (
                       <p>{result.review_feedback}</p>
                     )}
+                    <p>
+                      This records the reviewer&apos;s judgment. It does
+                      not prove the code is correct or secure.
+                    </p>
                   </div>
                 ) : (
                   <p className="workflow-description">
@@ -914,21 +1170,11 @@ function App() {
                       {result.audit_log.map((entry, index) => (
                         <li key={index}>
                           <code>
-                            {String(
-                              entry.event ||
-                                entry.action ||
-                                entry.node ||
-                                "Workflow event",
-                            )}
+                            {formatLabel(String(entry.agent || "Workflow event"))}
                           </code>
 
                           <span>
-                            {String(
-                              entry.message ||
-                                entry.details ||
-                                entry.status ||
-                                "",
-                            )}
+                            {formatLabel(String(entry.status || ""))}
                           </span>
                         </li>
                       ))}
@@ -967,6 +1213,17 @@ function App() {
                     {result.findings.length} total
                   </span>
                 </div>
+
+                {result.thread_id && (
+                  <button
+                    className="button button-secondary refresh-review"
+                    type="button"
+                    disabled={reviewLoading}
+                    onClick={refreshReview}
+                  >
+                    Refresh review
+                  </button>
+                )}
 
                 <div className="filter-row" aria-label="Filter findings">
                   <button
@@ -1138,7 +1395,7 @@ function App() {
               <div>
                 <h3>Ready when you are</h3>
                 <p>
-                  Enter Python code above and select{" "}
+                  Enter source code above and select{" "}
                   <strong>Run analysis</strong> to see the backend’s
                   actual results here.
                 </p>

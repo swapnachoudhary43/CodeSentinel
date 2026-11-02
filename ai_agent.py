@@ -9,7 +9,7 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field, ValidationError
 
-from config import get_gemini_api_key
+from config import get_gemini_api_key, validate_gemini_config
 
 
 MAX_SOURCE_LENGTH = 50_000
@@ -257,8 +257,18 @@ def review_python_code(
         return {
             "ok": False,
             "findings": [],
-            "summary": "",
+            "summary": "PARTIAL ANALYSIS: Gemini review unavailable because the API key is not configured.",
             "error": "Gemini API key is not configured.",
+        }
+
+    try:
+        validate_gemini_config()
+    except RuntimeError as exc:
+        return {
+            "ok": False,
+            "findings": [],
+            "summary": "PARTIAL ANALYSIS: Gemini configuration is invalid.",
+            "error": str(exc),
         }
 
     client = None
@@ -296,9 +306,7 @@ def review_python_code(
                     finding_data.update(
                         {
                             "source": "gemini_ai",
-                            "verification": (
-                                "potential_issue_not_independently_verified"
-                            ),
+                            "verification": "NOT_CHECKED",
                         }
                     )
 

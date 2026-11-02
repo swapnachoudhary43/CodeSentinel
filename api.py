@@ -1,14 +1,18 @@
+import json
 import os
+from collections.abc import Iterator
 from typing import Any
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
-from graph import build_graph
+from config import get_gemini_api_key
+from graph import REVIEW_DECISIONS, build_graph
 
 app = FastAPI(
     title="CodeSentinel API",
@@ -71,13 +75,29 @@ class AnalysisRequest(BaseModel):
 class ReviewRequest(BaseModel):
     decision: str = Field(
         ...,
-        description="Human review decision: approve or reject.",
+        description=(
+            "Human review decision: approve, approve_with_warnings, "
+            "request_changes, reject, or defer."
+        ),
     )
     feedback: str = Field(
         default="",
         max_length=2000,
         description="Optional reviewer feedback.",
     )
+
+
+def public_error(exc: Exception) -> str:
+    """Return a client-safe error without embedded credentials."""
+    message = f"{type(exc).__name__}: {exc}"
+    secret = get_gemini_api_key()
+    if secret and secret in message:
+        message = message.replace(secret, "[redacted]")
+    return message[:500]
+
+
+def _sse(payload: dict[str, Any]) -> str:
+    return f"data: {json.dumps(payload, default=str)}\n\n"
 
 
 def get_thread_config(thread_id: str) -> dict[str, Any]:
@@ -94,8 +114,11 @@ def serialize_result(result: dict[str, Any]) -> dict[str, Any]:
         "errors": result.get("errors", []),
         "ai_summary": result.get("ai_summary", ""),
         "line_count": result.get("line_count", 0),
+        "context": result.get("context", {}),
         "agent_status": result.get("agent_status", {}),
         "agent_results": result.get("agent_results", {}),
+        "specialized_agent_results": result.get("specialized_agent_results", {}),
+        "edge_case_recommendations": result.get("edge_case_recommendations", {}),
         "audit_log": result.get("audit_log", []),
         "review_required": result.get("review_required", False),
         "review_decision": result.get("review_decision", ""),
@@ -131,6 +154,7 @@ def analyze_code(request: AnalysisRequest) -> dict[str, Any]:
         response = serialize_result(result)
 
         snapshot = api_graph.get_state(config)
+        response["pending"] = bool(snapshot.next)
         if snapshot.next:
             response["status"] = "pending_review"
             response["review_required"] = True
@@ -141,8 +165,67 @@ def analyze_code(request: AnalysisRequest) -> dict[str, Any]:
     except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"Analysis workflow failed: {exc}",
+            detail=f"Analysis workflow failed: {public_error(exc)}",
         ) from exc
+
+
+def _result_from_snapshot(thread_id: str, config: dict[str, Any]) -> dict[str, Any]:
+    snapshot = api_graph.get_state(config)
+    response = serialize_result(snapshot.values or {})
+    response["pending"] = bool(snapshot.next)
+    if snapshot.next:
+        response["status"] = "pending_review"
+        response["review_required"] = True
+    response["thread_id"] = thread_id
+    return response
+
+
+def _analysis_events(request: AnalysisRequest, thread_id: str) -> Iterator[str]:
+    config = get_thread_config(thread_id)
+    initial_state = {
+        "source_code": request.source_code,
+        "language": request.language,
+        "require_human_review": request.require_human_review,
+    }
+
+    try:
+        for update in api_graph.stream(initial_state, config, stream_mode="updates"):
+            if not isinstance(update, dict):
+                continue
+            for node_name, node_update in update.items():
+                if str(node_name).startswith("__"):
+                    continue
+                latest: dict[str, Any] = {}
+                if isinstance(node_update, dict):
+                    audit_log = node_update.get("audit_log") or []
+                    if audit_log and isinstance(audit_log[-1], dict):
+                        latest = audit_log[-1]
+                yield _sse({
+                    "type": "agent_update",
+                    "node": node_name,
+                    "agent": latest.get("agent") or node_name,
+                    "status": latest.get("status") or "completed",
+                })
+
+        yield _sse({
+            "type": "complete",
+            "result": _result_from_snapshot(thread_id, config),
+        })
+    except Exception as exc:
+        yield _sse({
+            "type": "error",
+            "detail": f"Analysis workflow failed: {public_error(exc)}",
+        })
+
+
+@app.post("/api/analyze/stream")
+def analyze_code_stream(request: AnalysisRequest) -> StreamingResponse:
+    """Stream real workflow events, then the final analysis state."""
+    thread_id = str(uuid4())
+    return StreamingResponse(
+        _analysis_events(request, thread_id),
+        media_type="text/event-stream",
+    )
 
 
 @app.get("/api/review/{thread_id}")
@@ -169,7 +252,7 @@ def get_review_status(thread_id: str) -> dict[str, Any]:
     except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"Could not retrieve review status: {exc}",
+            detail=f"Could not retrieve review status: {public_error(exc)}",
         ) from exc
 
 
@@ -181,10 +264,11 @@ def submit_review(
     """Submit a human decision and resume the paused workflow."""
     decision = request.decision.strip().lower()
 
-    if decision not in {"approve", "reject"}:
+    if decision not in REVIEW_DECISIONS:
+        allowed = ", ".join(sorted(REVIEW_DECISIONS))
         raise HTTPException(
             status_code=422,
-            detail="Decision must be either 'approve' or 'reject'.",
+            detail=f"Decision must be one of: {allowed}.",
         )
 
     config = get_thread_config(thread_id)
@@ -224,5 +308,5 @@ def submit_review(
     except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"Could not resume review workflow: {exc}",
+            detail=f"Could not resume review workflow: {public_error(exc)}",
         ) from exc

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -102,6 +103,13 @@ def _diagnostic_finding(
     )
 
 
+def _java_source_name(source_code: str) -> str:
+    match = re.search(r"\bpublic\s+class\s+([A-Za-z_][A-Za-z0-9_]*)\b", source_code)
+    if match:
+        return f"{match.group(1)}.java"
+    return "Main.java"
+
+
 # ---------------------------------------------------------
 # Python: Ruff
 # ---------------------------------------------------------
@@ -196,17 +204,19 @@ def _check_c_family(
         if is_cpp
         else ["clang", "gcc"]
     )
+    compiler = next((name for name in candidates if shutil.which(name)), None)
+    compiler_path = shutil.which(compiler) if compiler else None
 
-    compiler = next(
-        (shutil.which(name) for name in candidates if shutil.which(name)),
-        None,
-    )
-
-    if not compiler:
-        return _failure(
-            f"No suitable {'C++' if is_cpp else 'C'} compiler found. "
-            f"Install one of: {', '.join(candidates)}."
-        )
+    if not compiler_path:
+        return {
+            "ok": False,
+            "findings": [],
+            "error": (
+                f"No suitable {'C++' if is_cpp else 'C'} compiler found. "
+                f"Install one of: {', '.join(candidates)}."
+            ),
+            "status": "UNAVAILABLE",
+        }
 
     with tempfile.TemporaryDirectory(prefix="codesentinel-") as temp_dir:
         extension = ".cpp" if is_cpp else ".c"
@@ -215,10 +225,15 @@ def _check_c_family(
         try:
             source_path.write_text(source_code, encoding="utf-8")
         except OSError as exc:
-            return _failure(f"Could not prepare source file: {exc}")
+            return {
+                "ok": False,
+                "findings": [],
+                "error": f"Could not prepare source file: {exc}",
+                "status": "FAILED",
+            }
 
         command = [
-            compiler,
+            compiler_path,
             "-fsyntax-only",
             "-fno-diagnostics-color",
         ]
@@ -233,10 +248,10 @@ def _check_c_family(
         result = _run_command(command, cwd=temp_dir)
 
     if not result["ok"]:
-        return result
+        return {**result, "status": "FAILED"}
 
     if result["returncode"] == 0:
-        return {"ok": True, "findings": [], "error": None}
+        return {"ok": True, "findings": [], "error": None, "status": "PASSED"}
 
     output = result["stderr"] or result["stdout"]
     findings = []
@@ -247,7 +262,7 @@ def _check_c_family(
 
         findings.append(
             _diagnostic_finding(
-                source="clang" if "clang" in Path(compiler).name else "gcc",
+                source="clang" if "clang" in Path(compiler_path).name else "gcc",
                 rule_id="CXX-SYNTAX" if is_cpp else "C-SYNTAX",
                 message=line.strip()[:1000],
             )
@@ -266,6 +281,7 @@ def _check_c_family(
         "ok": True,
         "findings": findings,
         "error": None,
+        "status": "FAILED",
     }
 
 
@@ -277,15 +293,26 @@ def _check_java(source_code: str) -> dict[str, Any]:
     javac = shutil.which("javac")
 
     if not javac:
-        return _failure("javac was not found. Install a JDK and add it to PATH.")
+        return {
+            "ok": False,
+            "findings": [],
+            "error": "javac was not found. Install a JDK and add it to PATH.",
+            "status": "UNAVAILABLE",
+        }
 
     with tempfile.TemporaryDirectory(prefix="codesentinel-") as temp_dir:
-        source_path = Path(temp_dir) / "Main.java"
+        source_name = _java_source_name(source_code)
+        source_path = Path(temp_dir) / source_name
 
         try:
             source_path.write_text(source_code, encoding="utf-8")
         except OSError as exc:
-            return _failure(f"Could not prepare Java source: {exc}")
+            return {
+                "ok": False,
+                "findings": [],
+                "error": f"Could not prepare Java source: {exc}",
+                "status": "FAILED",
+            }
 
         result = _run_command(
             [
@@ -300,10 +327,13 @@ def _check_java(source_code: str) -> dict[str, Any]:
         )
 
     if not result["ok"]:
-        return result
+        return {
+            **result,
+            "status": "FAILED",
+        }
 
     if result["returncode"] == 0:
-        return {"ok": True, "findings": [], "error": None}
+        return {"ok": True, "findings": [], "error": None, "status": "PASSED"}
 
     output = result["stderr"] or result["stdout"]
     findings = []
@@ -329,7 +359,7 @@ def _check_java(source_code: str) -> dict[str, Any]:
             )
         )
 
-    return {"ok": True, "findings": findings, "error": None}
+    return {"ok": True, "findings": findings, "error": None, "status": "FAILED"}
 
 
 # ---------------------------------------------------------
@@ -340,7 +370,12 @@ def _check_javascript(source_code: str) -> dict[str, Any]:
     node = shutil.which("node")
 
     if not node:
-        return _failure("Node.js was not found. Install Node.js and add it to PATH.")
+        return {
+            "ok": False,
+            "findings": [],
+            "error": "Node.js was not found. Install Node.js and add it to PATH.",
+            "status": "UNAVAILABLE",
+        }
 
     result = _run_command(
         [node, "--check", "-"],
@@ -348,10 +383,10 @@ def _check_javascript(source_code: str) -> dict[str, Any]:
     )
 
     if not result["ok"]:
-        return result
+        return {**result, "status": "FAILED"}
 
     if result["returncode"] == 0:
-        return {"ok": True, "findings": [], "error": None}
+        return {"ok": True, "findings": [], "error": None, "status": "PASSED"}
 
     output = result["stderr"] or result["stdout"]
 
@@ -365,6 +400,7 @@ def _check_javascript(source_code: str) -> dict[str, Any]:
             )
         ],
         "error": None,
+        "status": "FAILED",
     }
 
 
@@ -393,7 +429,7 @@ def run_syntax_check(
     if normalized == "python":
         try:
             compile(source_code, "<submitted_code>", "exec")
-            return {"ok": True, "findings": [], "error": None}
+            return {"ok": True, "findings": [], "error": None, "status": "PASSED"}
         except SyntaxError as exc:
             return {
                 "ok": True,
@@ -407,6 +443,7 @@ def run_syntax_check(
                     )
                 ],
                 "error": None,
+                "status": "FAILED",
             }
         except (ValueError, TypeError) as exc:
             return _failure(f"Python syntax check failed: {exc}")

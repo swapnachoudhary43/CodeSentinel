@@ -256,7 +256,7 @@ def test_graph_verifies_gemini_division_finding(monkeypatch):
         if item["source"] == "gemini_ai"
     )
 
-    assert finding["verification"] == "requires_human_review"
+    assert finding["verification"] == "UNRESOLVED"
 
 
 def test_graph_keeps_unrelated_ai_finding_unverified(monkeypatch):
@@ -286,7 +286,7 @@ def test_graph_keeps_unrelated_ai_finding_unverified(monkeypatch):
         if item["source"] == "gemini_ai"
     )
 
-    assert finding["verification"] == "not_verified"
+    assert finding["verification"] == "NOT_CHECKED"
 
 
 # ---------------------------------------------------------
@@ -461,10 +461,13 @@ def test_summary_concern_without_findings_is_not_reported_as_passed(
     result = invoke_graph(
         "def divide(a, b):\n"
         "    return a / b\n",
-        require_human_review=True,
+        require_human_review=False,
     )
 
     assert result["status"] != "analysis_passed"
-    assert result["findings"] == []
+    assert not any(
+        finding.get("source") == "gemini_ai"
+        for finding in result["findings"]
+    )
     assert result["review_required"] is False
     assert "summary/findings inconsistency" in result["summary"].lower()

@@ -15,7 +15,7 @@ def test_division_risk_requires_human_review():
 
     result = verify_finding(source, finding)
 
-    assert result["verification"] == "requires_human_review"
+    assert result["verification"] == "UNRESOLVED"
     assert "division expression" in result["verification_evidence"]
     assert result["rule_id"] == "DIV0-001"
 
@@ -34,7 +34,7 @@ def test_unrelated_ai_finding_remains_unverified():
 
     result = verify_finding(source, finding)
 
-    assert result["verification"] == "not_verified"
+    assert result["verification"] == "NOT_CHECKED"
 
 
 def test_ruff_finding_is_marked_as_tool_reported():
@@ -48,7 +48,7 @@ def test_ruff_finding_is_marked_as_tool_reported():
 
     result = verify_finding("unused = 1\n", finding)
 
-    assert result["verification"] == "tool_reported"
+    assert result["verification"] == "NOT_CHECKED"
 
 
 def test_multiple_findings_are_processed():
@@ -71,5 +71,5 @@ def test_multiple_findings_are_processed():
     results = verify_findings("x = 1\n", findings)
 
     assert len(results) == 2
-    assert results[0]["verification"] == "not_verified"
-    assert results[1]["verification"] == "tool_reported"
+    assert results[0]["verification"] == "NOT_CHECKED"
+    assert results[1]["verification"] == "NOT_CHECKED"
