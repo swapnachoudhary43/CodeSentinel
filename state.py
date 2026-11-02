@@ -27,3 +27,8 @@ class CodeSentinelState(TypedDict, total=False):
     # Bounded self-correction
     ai_retry_count: int
     verification_feedback: list[dict[str, Any]]
+
+    # Structured output from specialized agents
+    context: dict[str, Any]
+    specialized_agent_results: dict[str, Any]
+    edge_case_recommendations: dict[str, Any]
