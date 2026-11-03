@@ -1,10 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 
-const API_URL =
-  import.meta.env.VITE_API_URL ??
-  (import.meta.env.DEV ? "" : "http://127.0.0.1:8000");
-const API_HINT = API_URL || "http://127.0.0.1:8000";
+const configuredApiUrl = (import.meta.env.VITE_API_URL ?? "")
+  .trim()
+  .replace(/\/$/, "");
+const API_URL = import.meta.env.DEV ? "" : configuredApiUrl;
+const productionApiMissing =
+  !import.meta.env.DEV && configuredApiUrl.length === 0;
+const API_HINT = import.meta.env.DEV
+  ? "http://127.0.0.1:8000"
+  : configuredApiUrl;
 const SUPPORTED_LANGUAGES = [
   "python",
   "javascript",
@@ -285,6 +290,11 @@ function App() {
   }, [result, filter]);
 
   useEffect(() => {
+    if (productionApiMissing) {
+      setBackendOnline(false);
+      return;
+    }
+
     let cancelled = false;
 
     fetch(`${API_URL}/health`)
@@ -672,11 +682,13 @@ function App() {
               className={`connection-dot${backendOnline === false ? " is-offline" : ""}`}
             />
             <span>
-              {backendOnline === false
-                ? "API unreachable"
-                : backendOnline
-                  ? "API connected"
-                  : "Checking API"}
+              {productionApiMissing
+                ? "API URL missing"
+                : backendOnline === false
+                  ? "API unreachable"
+                  : backendOnline
+                    ? "API connected"
+                    : "Checking API"}
             </span>
             <div className="avatar" aria-label="User initials">
               SC
@@ -852,7 +864,9 @@ function App() {
                   <strong>Analysis could not be completed</strong>
                   <p>{requestError}</p>
                   <span>
-                    Check that the backend is running at {API_HINT}.
+                    {productionApiMissing
+                      ? "Set VITE_API_URL to the Render service origin and rebuild the frontend."
+                      : `Check that the backend is running at ${API_HINT}.`}
                   </span>
                 </div>
               </div>

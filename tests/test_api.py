@@ -3,6 +3,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command
 
 import api
 import graph
@@ -287,6 +288,63 @@ def test_stream_emits_real_agent_events(client):
     assert "static_analysis_agent" in agents
     assert "report_agent" in agents
     assert complete["result"]["status"] == "analysis_passed"
+
+
+def test_local_cors_includes_vite_dev_servers(monkeypatch):
+    monkeypatch.delenv("CODESENTINEL_ENV", raising=False)
+    monkeypatch.delenv("CORS_ORIGINS", raising=False)
+    monkeypatch.delenv("FRONTEND_URL", raising=False)
+
+    origins = api.allowed_cors_origins()
+
+    assert "http://127.0.0.1:5173" in origins
+    assert "http://localhost:5173" in origins
+
+
+def test_production_cors_rejects_localhost(monkeypatch):
+    monkeypatch.setenv("CODESENTINEL_ENV", "production")
+    monkeypatch.setenv(
+        "CORS_ORIGINS",
+        "https://codesentinel.vercel.app, http://localhost:5173",
+    )
+
+    assert api.allowed_cors_origins() == ["https://codesentinel.vercel.app"]
+
+
+def test_sqlite_checkpoint_resumes_review(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        graph,
+        "review_python_code",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "findings": [],
+            "summary": "No actionable issue was identified by this review.",
+            "error": None,
+        },
+    )
+    database = tmp_path / "reviews.sqlite"
+    monkeypatch.setenv("CHECKPOINT_SQLITE", str(database))
+
+    first = build_graph(checkpointer=api.build_checkpointer())
+    config = {"configurable": {"thread_id": "persisted-review"}}
+    first.invoke(
+        {
+            "source_code": "def divide(a, b):\n    return a / b\n",
+            "language": "python",
+            "require_human_review": True,
+        },
+        config=config,
+    )
+    assert first.get_state(config).next
+
+    second = build_graph(checkpointer=api.build_checkpointer())
+    result = second.invoke(
+        Command(resume={"decision": "defer", "feedback": "checked later"}),
+        config=config,
+    )
+
+    assert result["review_decision"] == "defer"
+    assert result["review_completed"] is True
 
 
 def test_public_error_redacts_api_key(monkeypatch):

@@ -1,6 +1,8 @@
 import json
 import os
+import sqlite3
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -20,26 +22,65 @@ app = FastAPI(
     version="0.2.0",
 )
 
-frontend_url = os.getenv("FRONTEND_URL", "").strip()
-
-allowed_origins = [
+LOCAL_DEV_ORIGINS = (
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-]
+)
+_checkpoint_connection: sqlite3.Connection | None = None
 
-if frontend_url:
-    allowed_origins.append(frontend_url.rstrip("/"))
+
+def is_production() -> bool:
+    return os.getenv("CODESENTINEL_ENV", "").strip().lower() == "production"
+
+
+def allowed_cors_origins() -> list[str]:
+    """Local dev allows the Vite server. Production allows only configured public origins."""
+    raw = os.getenv("CORS_ORIGINS", "") or os.getenv("FRONTEND_URL", "")
+    configured: list[str] = []
+    for item in raw.split(","):
+        origin = item.strip().rstrip("/")
+        if origin and origin not in configured:
+            configured.append(origin)
+
+    if is_production():
+        return [
+            origin
+            for origin in configured
+            if "localhost" not in origin and "127.0.0.1" not in origin
+        ]
+
+    origins = list(LOCAL_DEV_ORIGINS)
+    for origin in configured:
+        if origin not in origins:
+            origins.append(origin)
+    return origins
+
+
+def build_checkpointer():
+    """Keep human-review threads in memory locally, or in sqlite when configured."""
+    global _checkpoint_connection
+    database = os.getenv("CHECKPOINT_SQLITE", "").strip()
+    if not database:
+        return InMemorySaver()
+
+    from langgraph.checkpoint.sqlite import SqliteSaver
+
+    path = Path(database)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _checkpoint_connection = sqlite3.connect(path, check_same_thread=False)
+    return SqliteSaver(_checkpoint_connection)
+
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=allowed_cors_origins(),
     allow_credentials=False,
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],
 )
 
 # One checkpointer instance is shared by all API requests.
-checkpointer = InMemorySaver()
+checkpointer = build_checkpointer()
 api_graph = build_graph(checkpointer=checkpointer)
 
 
@@ -134,6 +175,7 @@ def health_check() -> dict[str, str]:
     return {
         "status": "healthy",
         "service": "codesentinel-api",
+        "environment": "production" if is_production() else "local",
     }
 
 
@@ -225,6 +267,10 @@ def analyze_code_stream(request: AnalysisRequest) -> StreamingResponse:
     return StreamingResponse(
         _analysis_events(request, thread_id),
         media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 

@@ -107,23 +107,38 @@ cd ..
 
 ## Running CodeSentinel
 
-Start the backend from the project root:
+Use two PowerShell terminals. Both commands start from the project root.
+
+Terminal 1, API:
 
 ```powershell
-python -m uvicorn api:app --reload --host 127.0.0.1 --port 8000
+.\.venv\Scripts\python.exe -m uvicorn api:app --host 127.0.0.1 --port 8000
 ```
 
-Start the frontend in a second terminal:
+Terminal 2, workspace:
 
 ```powershell
-cd frontend
-npm run dev
+npm run dev --prefix frontend -- --host 127.0.0.1 --port 5173
 ```
 
-Open the frontend:
+The Vite dev server proxies `/api` and `/health` to `http://127.0.0.1:8000`. If the API port changes, set `BACKEND_PROXY_TARGET` before starting Vite.
+
+Open the workspace:
 
 ```text
-http://localhost:5173
+http://127.0.0.1:5173
+```
+
+Terminal-only live demo, with the instructor choosing the decision:
+
+```powershell
+.\.venv\Scripts\python.exe demo.py
+```
+
+Or review a file and record a decision:
+
+```powershell
+.\.venv\Scripts\python.exe demo.py .\sample.py --language python --decision defer
 ```
 
 Backend API documentation:
@@ -148,7 +163,7 @@ The workflow is coordinated using LangGraph.
 4. **AI Review Agent:** Requests structured code-review findings from Gemini.
 5. **Verification Agent:** Inspects findings using static evidence, including AST analysis for selected division-related concerns.
 6. **AI Reassessment Agent:** Can request one reassessment using verification feedback.
-7. **Human Review:** Pauses for approval or rejection when findings require review and human review is enabled.
+7. **Human Review:** Pauses when findings exist and human review is requested. The reviewer can approve, approve with warnings, request changes, reject, or defer.
 8. **Report Agent:** Produces the final summary and records the completed workflow.
 
 The workflow also maintains shared state and an audit log containing agent execution information.
@@ -172,6 +187,14 @@ Run frontend lint:
 ```powershell
 npm run lint --prefix frontend
 ```
+
+## Deployment
+
+The public frontend and API stay separate from the local dev proxy.
+
+- Frontend: Vercel, with the project root set to `frontend`. Build command `npm run build`. Set `VITE_API_URL` to the Render origin, including `https://`, with no trailing path and no localhost address.
+- Backend: Render, using `render.yaml`. Set `GEMINI_API_KEY` in the Render dashboard. Set `FRONTEND_URL` and `CORS_ORIGINS` to the Vercel origin. Do not put localhost in those values.
+- Review threads on Render are stored in `data/codesentinel.sqlite` for the life of that service disk. A new deploy or a free-instance restart can clear them. Run one instance so a decision reaches the same checkpoint.
 
 ## Safety and Limitations
 
