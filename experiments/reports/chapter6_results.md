@@ -1,0 +1,82 @@
+# Chapter 6. Results and discussion
+
+The numbers in this chapter are computed from `experiments/runs`. They are not fixture demonstrations and they are not published scores from PaperQA2 or OpenScholar.
+
+## Experimental setup
+
+- Dataset: Qasper 0.3, validation split, archive member `qasper-dev-v0.3.json`.
+- Evaluation questions: 80. Papers indexed: 66. Unanswerable questions in the subset: 8.
+- Selection seed: 20261107. The calibration split was not scored and was not used to set a threshold.
+- Generator: gemini-3.5-flash-lite. Temperature: 0. Prompt version: b8f52498664dc77d.
+- Retrieval: HashingEmbedder. Cosine similarity over hashed token counts. This is the dense channel already implemented in the repository. It is not a neural embedding model such as all-MiniLM-L6-v2.
+- Chunks: 200 words, overlap 40, top 5. Indexed chunks: 1917.
+- Threshold: None. Null means the score threshold was not fitted. Proposed still abstains when retrieval returns nothing or the verifier deletes every sentence. The calibration split was not used.
+
+Target size was 80 questions. Scored rows by system: {'b0': 80, 'b1': 80, 'proposed': 80, 'proposed_no_verifier': 80, 'proposed_bm25_only': 80, 'proposed_dense_only': 80}.
+
+## Baseline comparison
+
+| Metric | B0 LLM-only | B1 dense RAG | Proposed |
+| --- | --- | --- | --- |
+| Answerable token F1 | 0.063 | 0.058 | 0.092 |
+| Context recall | 0.000 | 0.158 | 0.161 |
+| Context precision | 0.000 | 0.048 | 0.057 |
+| Model-judge support | unavailable | unavailable | 0.967 |
+| Model-judge unsupported rate | unavailable | unavailable | 0.033 |
+| Evidence citation hit rate | unavailable | unavailable | 0.208 |
+| Refusal rate | 0.000 | 0.662 | 0.550 |
+| Abstention on unanswerable | 0.000 | 0.750 | 0.750 |
+| Refusal on answerable | 0.000 | 0.653 | 0.528 |
+| Mean latency (seconds) | 4.326 | 4.274 | 7.313 |
+| API failure rate | 0.000 | 0.000 | 0.000 |
+| Scored questions | 80 | 80 | 80 |
+
+
+Token F1 is SQuAD token overlap against the best answerable annotator. A refusal on an answerable question scores 0. Unanswerable questions are left out of that mean and are reported through the abstention rate.
+
+On this 80-question slice the proposed mean token F1 on answerable questions was 0.092, compared with 0.063 for B0 and 0.058 for B1. The proposed system refused 0.528 of answerable questions, and those refusals score 0 in the mean. The absolute F1 values are low. That is expected for full-paper questions when many answers are refusals and when retrieval often misses the gold evidence.
+
+B0 never refused (refusal rate 0.000). B1's pipeline abstention flag is 0.000 because B1 does not set that flag, while its answer text matched the abstain sentence on 0.662 of all scored questions. On the unanswerable questions, B1 and the proposed system both abstained at 0.750 and 0.750.
+
+Context recall was 0.161 for the proposed system and 0.158 for B1. The model-judge support rate for the proposed system was 0.967, while the share of those cited chunks that actually covered a gold evidence string was 0.208. The verifier and the generator agree more often than the cited chunk matches the Qasper evidence. The judge score is not ground truth.
+
+Dropping the verifier moved token F1 from 0.092 to 0.089. Its pipeline abstention flag is 0.000, while its refusal rate stays 0.550, the same as the proposed system. Most refusals are the generator writing the abstain sentence, not the verifier deleting sentences. BM25 only was 0.069 and dense only was 0.043. Dense only refused 0.750 of answerable questions. Hybrid retrieval is associated with a higher token F1 than either channel alone on this slice. The verifier change is small. No significance test was run, and none of these rows is a comparison with PaperQA2 or OpenScholar.
+
+Recorded mean latency was 4.326 seconds for B0, 4.274 for B1, and 7.313 for the proposed system. The no-verifier latency of 0.283 seconds is not a speed result: that ablation uses the same generation prompt as the proposed system, so the response cache answered it. Two early requests for question df5a4505 returned HTTP 429 on the free-tier limit of 15 requests per minute. Those error rows were retried and replaced. The saved API failure rate is 0.
+
+Context recall and context precision use gold evidence strings from Qasper. They are undefined in the table only when a system has no scored evidence rows. B0 retrieves nothing, so its context precision is 0 whenever evidence exists.
+
+The model-judge support rate is the verifier's SUPPORTED fraction. It is not human ground truth. B0 and B1 do not run the verifier, so that cell is unavailable for them.
+
+## Ablation
+
+| Metric | Proposed | No verifier | BM25 only | Dense only |
+| --- | --- | --- | --- | --- |
+| Answerable token F1 | 0.092 | 0.089 | 0.069 | 0.043 |
+| Context recall | 0.161 | 0.161 | 0.129 | 0.158 |
+| Context precision | 0.057 | 0.057 | 0.048 | 0.048 |
+| Model-judge support | 0.967 | unavailable | 0.853 | 0.867 |
+| Model-judge unsupported rate | 0.033 | unavailable | 0.147 | 0.133 |
+| Evidence citation hit rate | 0.208 | unavailable | 0.133 | 0.179 |
+| Refusal rate | 0.550 | 0.550 | 0.575 | 0.750 |
+| Abstention on unanswerable | 0.750 | 0.750 | 0.750 | 0.750 |
+| Refusal on answerable | 0.528 | 0.528 | 0.556 | 0.750 |
+| Mean latency (seconds) | 7.313 | 0.283 | 7.489 | 2.235 |
+| API failure rate | 0.000 | 0.000 | 0.000 | 0.000 |
+| Scored questions | 80 | 80 | 80 | 80 |
+
+
+No verifier uses the same hybrid retrieval as the proposed system and keeps the generator's raw answer. BM25 only and dense only keep the verifier and change one retrieval channel. A higher token F1 in one row is a difference on this subset. No significance test was run, and these rows do not show that the system beats published research assistants.
+
+## Human evaluation
+
+The sheet `human_evaluation_template.csv` lists the 20 evaluation questions with the lowest question ids, with blank reviewer scores. Two reviewers have not completed it. No human rating is reported.
+
+## Error analysis and limitations
+
+- The dense channel is hashed token cosine, not a trained neural retriever.
+- Retrieval searches the whole frozen collection, not only the question's paper.
+- Qasper figure evidence marked `FLOAT SELECTED` may not appear in the body text. Captions are indexed.
+- The official test split was not scored because its answers are not in the train/dev archive.
+- API failures, if the failure rate is above zero, remain in the jsonl and in the table.
+- Passing the software tests does not mean the answers are correct.

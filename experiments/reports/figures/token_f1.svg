@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="516" height="280">
+<text x="16" y="24" font-family="sans-serif" font-size="16">Answerable token F1</text>
+<text x="16" y="272" font-family="sans-serif" font-size="11">Source: experiments/runs/metric_results.json</text>
+<rect x="48" y="111" width="120" height="109" fill="#3d5a40"/>
+<text x="48" y="105" font-family="sans-serif" font-size="12">0.063</text>
+<text x="48" y="238" font-family="sans-serif" font-size="11">B0 LLM-only</text>
+<rect x="204" y="119" width="120" height="101" fill="#3d5a40"/>
+<text x="204" y="113" font-family="sans-serif" font-size="12">0.058</text>
+<text x="204" y="238" font-family="sans-serif" font-size="11">B1 dense RAG</text>
+<rect x="360" y="60" width="120" height="160" fill="#3d5a40"/>
+<text x="360" y="54" font-family="sans-serif" font-size="12">0.092</text>
+<text x="360" y="238" font-family="sans-serif" font-size="11">Proposed</text>
+</svg>

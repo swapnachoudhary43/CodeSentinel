@@ -1,0 +1,25 @@
+{
+  "questions_path": "experiments\\dataset\\evaluation_questions.jsonl",
+  "papers_path": "experiments\\dataset\\papers.json",
+  "generator": "gemini-3.5-flash-lite",
+  "temperature": 0,
+  "prompt_version": "b8f52498664dc77d",
+  "embedder": "HashingEmbedder",
+  "embedder_note": "Cosine similarity over hashed token counts. This is the dense channel already implemented in the repository. It is not a neural embedding model such as all-MiniLM-L6-v2.",
+  "chunk_words": 200,
+  "overlap": 40,
+  "k": 5,
+  "threshold": null,
+  "threshold_note": "Null means the score threshold was not fitted. Proposed still abstains when retrieval returns nothing or the verifier deletes every sentence. The calibration split was not used.",
+  "systems": [
+    "b0",
+    "b1",
+    "proposed",
+    "proposed_no_verifier",
+    "proposed_bm25_only",
+    "proposed_dense_only"
+  ],
+  "indexed_papers": 66,
+  "indexed_chunks": 1917,
+  "question_count": 80
+}

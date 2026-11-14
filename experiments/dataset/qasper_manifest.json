@@ -1,0 +1,22 @@
+{
+  "dataset_name": "qasper",
+  "dataset_version": "0.3",
+  "source_url": "https://allenai.org/data/qasper",
+  "archive_url": "https://qasper-dataset.s3.us-west-2.amazonaws.com/qasper-train-dev-v0.3.tgz",
+  "archive_member": "qasper-dev-v0.3.json",
+  "license": "The Hugging Face dataset card for allenai/qasper and its loader script state CC BY 4.0. The README inside qasper-train-dev-v0.3.tgz does not repeat the license line.",
+  "source_split": "validation",
+  "official_dev_papers": 281,
+  "official_dev_questions_with_annotators": 1005,
+  "evaluation_questions": 80,
+  "evaluation_papers": 66,
+  "evaluation_unanswerable": 8,
+  "calibration_questions": 15,
+  "calibration_unanswerable": 1,
+  "calibration_use": "Held out. Not scored. Not used to choose the abstention threshold. The reported run leaves the threshold unset.",
+  "selection": "Sort by paper id and question id. Shuffle answerable and unanswerable lists with random.Random(seed). Take a stratified quota that rounds evaluation_size times the dev unanswerable rate. Calibration is the next disjoint slice of each list.",
+  "random_seed": 20261107,
+  "reference_answer": "First annotator, per the order in the v0.3 JSON. Token F1 also reports the maximum over all annotators.",
+  "preprocessing": "Abstract, full-text paragraphs, and figure/table captions are kept. Figure images are not downloaded. Chunks are 200 whitespace-separated words with overlap 40, split per section by the existing chunker. The indexed collection is only the papers that appear in the evaluation questions.",
+  "test_split": "The official test split is not in qasper-train-dev-v0.3.tgz and is not scored."
+}

@@ -1,0 +1,32 @@
+[
+  {
+    "paper_id": "rag-notes",
+    "title": "Hybrid Retrieval Notes",
+    "year": 2024,
+    "sections": [
+      {
+        "name": "Abstract",
+        "text": "This note describes a small research assistant that reads a closed set of papers. The assistant writes an answer only after retrieval. A later check removes any sentence that the cited passage does not state."
+      },
+      {
+        "name": "Method",
+        "text": "Reciprocal rank fusion combines a keyword list from BM25 and a dense list from embeddings. Each list contributes one divided by sixty plus the rank. Citation verification labels a sentence supported only when the cited passage states the claim. The assistant abstains when the best fused score is below a threshold chosen on a development set. The planned evaluation uses a frozen subset of questions about NLP papers. Faithfulness asks whether the answer stays inside the retrieved context."
+      }
+    ]
+  },
+  {
+    "paper_id": "leaf-spots",
+    "title": "Leaf Spot Notes",
+    "year": 2024,
+    "sections": [
+      {
+        "name": "Abstract",
+        "text": "This note describes tomato leaf disease classification from a single uploaded photograph. The photograph shows one leaf. The output is a class label for that leaf."
+      },
+      {
+        "name": "Method",
+        "text": "Accuracy is the reported metric for this tomato leaf disease model. A convolutional network classifies each leaf photograph as early blight or a healthy leaf. The dataset contains field photographs of leaves taken in daylight. The authors state that the model fails on dark images. This note does not study citation checks."
+      }
+    ]
+  }
+]

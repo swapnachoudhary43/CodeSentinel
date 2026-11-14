@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="672" height="280">
+<text x="16" y="24" font-family="sans-serif" font-size="16">Ablation answerable token F1</text>
+<text x="16" y="272" font-family="sans-serif" font-size="11">Source: experiments/runs/metric_results.json</text>
+<rect x="48" y="60" width="120" height="160" fill="#3d5a40"/>
+<text x="48" y="54" font-family="sans-serif" font-size="12">0.092</text>
+<text x="48" y="238" font-family="sans-serif" font-size="11">Proposed</text>
+<rect x="204" y="65" width="120" height="155" fill="#3d5a40"/>
+<text x="204" y="59" font-family="sans-serif" font-size="12">0.089</text>
+<text x="204" y="238" font-family="sans-serif" font-size="11">No verifier</text>
+<rect x="360" y="100" width="120" height="120" fill="#3d5a40"/>
+<text x="360" y="94" font-family="sans-serif" font-size="12">0.069</text>
+<text x="360" y="238" font-family="sans-serif" font-size="11">BM25 only</text>
+<rect x="516" y="145" width="120" height="75" fill="#3d5a40"/>
+<text x="516" y="139" font-family="sans-serif" font-size="12">0.043</text>
+<text x="516" y="238" font-family="sans-serif" font-size="11">Dense only</text>
+</svg>

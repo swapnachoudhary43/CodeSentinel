@@ -1,0 +1,13 @@
+{
+  "generator": "gemini-3.5-flash-lite",
+  "free_tier_limit_observed": "generativelanguage.googleapis.com/generate_content_free_tier_requests limit 15 for gemini-3.5-flash-lite",
+  "replaced_errors": [
+    {
+      "question_id": "df5a4505edccc0ee11349ed6e7958cf6b84c9ed4",
+      "systems": ["b1", "proposed"],
+      "error": "HTTP 429 RESOURCE_EXHAUSTED on the first attempt",
+      "resolution": "Retried after pacing. The jsonl rows now store the successful responses, so the saved API failure rate is 0."
+    }
+  ],
+  "cache_note": "proposed_no_verifier uses the same generation prompt as proposed, so its latency is dominated by cache hits and is not an uncached runtime."
+}
